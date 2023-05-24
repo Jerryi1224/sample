@@ -1,42 +1,62 @@
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::time::Duration;
 
-use salvo::basic_auth::{BasicAuth, BasicAuthValidator};
+use salvo::cache::{Cache, MemoryStore, RequestIssuer};
+use salvo::http::cookie::time;
 use salvo::prelude::*;
+use salvo::writer::Text;
+use time::OffsetDateTime;
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt().init();
 
+    let short_cache = Cache::new(
+        MemoryStore::builder().time_to_live(Duration::from_secs(5)).build(),
+        RequestIssuer::default(),
+    );
+    let long_cache = Cache::new(
+        MemoryStore::builder().time_to_live(Duration::from_secs(60)).build(),
+        RequestIssuer::default(),
+    );
+    let router = Router::new()
+        .get(home)
+        .push(Router::with_path("short").hoop(short_cache).get(short))
+        .push(Router::with_path("long").hoop(long_cache).get(long));
     let acceptor = TcpListener::new("127.0.0.1:5800").bind().await;
-    Server::new(acceptor).serve(route()).await;
-}
-
-#[allow(dead_code)]
-#[derive(Default, Clone, Debug)]
-struct Config {
-    username: String,
-    password: String,
+    Server::new(acceptor).serve(router).await;
 }
 
 #[handler]
-async fn hello(depot: &mut Depot) -> String {
-    let current_user = depot.get::<&str>("current_user").unwrap();
-    format!("Hello {current_user}")
+async fn home() -> Text<&'static str> {
+    Text::Html(HOME_HTML)
 }
 
-struct Validator;
-#[async_trait]
-impl BasicAuthValidator for Validator {
-    async fn validate(&self, username: &str, password: &str, depot: &mut Depot) -> bool {
-        depot.insert("current_user", "root");
-        username == "root" && password == "pwd"
-    }
+#[handler]
+async fn short() -> String {
+    format!("Hello World, my birth time is {}", OffsetDateTime::now_utc())
+}
+#[handler]
+async fn long() -> String {
+    format!("Hello World, my birth time is {}", OffsetDateTime::now_utc())
 }
 
-fn route() -> Router {
-    let auth_handler = BasicAuth::new(Validator);
-    Router::new()
-        .hoop(auth_handler)
-        .handle(hello)
-}
+static HOME_HTML: &str = r#"
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Cache Example</title>
+    </head>
+    <body>
+        <h2>Cache Example</h2>
+        <p>
+            This examples shows how to use cache middleware.
+        </p>
+        <p>
+            <a href="/short" target="_blank">Cache 5 seconds</a>
+        </p>
+        <p>
+            <a href="/long" target="_blank">Cache 1 minute</a>
+        </p>
+    </body>
+</html>
+"#;
