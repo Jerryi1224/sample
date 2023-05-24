@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use salvo::affix;
+use salvo::basic_auth::{BasicAuth, BasicAuthValidator};
 use salvo::prelude::*;
 
 #[tokio::main]
@@ -19,38 +19,24 @@ struct Config {
     password: String,
 }
 
-#[derive(Default, Debug)]
-struct State {
-    fails: Mutex<Vec<String>>,
-}
-
 #[handler]
 async fn hello(depot: &mut Depot) -> String {
-    let config = depot.obtain::<Config>().unwrap();
-    let custom_data = depot.get::<&str>("custom_data").unwrap();
-    let state = depot.obtain::<Arc<State>>().unwrap();
-    let mut fails_ref = state.fails.lock().unwrap();
-    fails_ref.push("fail message".into());
-    format!("Hello world\nConfig: {config:#?}\nFails: {fails_ref:#?}\nCustom Data: {custom_data}")
+    let current_user = depot.get::<&str>("current_user").unwrap();
+    format!("Hello {current_user}")
+}
+
+struct Validator;
+#[async_trait]
+impl BasicAuthValidator for Validator {
+    async fn validate(&self, username: &str, password: &str, depot: &mut Depot) -> bool {
+        depot.insert("current_user", "root");
+        username == "root" && password == "pwd"
+    }
 }
 
 fn route() -> Router {
-    let config = Config {
-        username: "root".to_string(),
-        password: "pwd".to_string(),
-    };
+    let auth_handler = BasicAuth::new(Validator);
     Router::new()
-        .hoop(
-            affix::inject(config)
-                .inject(Arc::new(State {
-                    fails: Mutex::new(Vec::new())
-                }))
-                .insert("custom_data", "I Love this world!")
-        )
-        .get(hello)
-        .push(
-            Router::with_path("hello")
-        )
-        .get(hello)
-
+        .hoop(auth_handler)
+        .handle(hello)
 }
